@@ -1,0 +1,68 @@
+import pandas as pd
+import numpy as np
+import re
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+# 1. Load data (adjust path to your extracted CSV from dataset)
+df = pd.read_csv('/content/drive/MyDrive/swiggy.csv', engine='python', on_bad_lines='skip')
+# 2. Pre-process data and label sentiments
+df = df.dropna(subset=['review_description', 'rating'])
+def label_sentiment(r):
+    if r >= 4.0:
+        return 1 # positive
+    elif r <= 2.0:
+        return 0 # negative
+    else:
+        return None
+df['sentiment'] = df['rating'].apply(label_sentiment)
+df = df.dropna(subset=['sentiment'])
+df['sentiment'] = df['sentiment'].astype(int)
+# 3. Clean text
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'[^a-z0-9\s]', '', text)
+    return text.strip()
+df['text_clean'] = df['review_description'].astype(str).apply(clean_text)
+# 4. Train-test split
+X_train, X_test, y_train, y_test = train_test_split(
+    df['text_clean'], df['sentiment'], test_size=0.2, random_state=42, stratify=df['sentiment']
+)
+# 5. Tokenization
+max_words = 10000
+tokenizer = Tokenizer(num_words=max_words, oov_token='<UNK>')
+tokenizer.fit_on_texts(X_train)
+seq_train = tokenizer.texts_to_sequences(X_train)
+seq_test = tokenizer.texts_to_sequences(X_test)
+# 6. Padding
+maxlen = 100
+X_train_seq = pad_sequences(seq_train, maxlen=maxlen, padding='post')
+X_test_seq = pad_sequences(seq_test, maxlen=maxlen, padding='post')
+# 7. Model definition
+model = Sequential([
+    Embedding(input_dim=max_words, output_dim=128, input_length=maxlen),
+    LSTM(64, return_sequences=False),
+    Dropout(0.5),
+    Dense(1, activation='sigmoid')
+])
+model.compile(loss='binary_crossentropy', optimizer=Adam(1e-3), metrics=['accuracy'])
+model.summary()
+# 8. Training with early stopping
+early = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+history = model.fit(X_train_seq, y_train,
+                    validation_split=0.1,
+                    epochs=10,
+                    batch_size=128,
+                    callbacks=[early],
+                    verbose=1)
+# 9. Evaluation
+loss, acc = model.evaluate(X_test_seq, y_test, verbose=0)
+print(f"Test Accuracy: {acc:.4f}")
+# For deeper metrics (e.g., F1, precision/recall):
+from sklearn.metrics import classification_report
+y_pred = (model.predict(X_test_seq) > 0.5).astype(int)
+print(classification_report(y_test, y_pred, digits=4))
